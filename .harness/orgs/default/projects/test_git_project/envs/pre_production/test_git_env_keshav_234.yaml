@@ -1,0 +1,6 @@
+environment:
+  name: test_git_env_keshav_234
+  identifier: test_git_env_keshav_234
+  orgIdentifier: default
+  projectIdentifier: test_git_project
+  type: PreProduction
