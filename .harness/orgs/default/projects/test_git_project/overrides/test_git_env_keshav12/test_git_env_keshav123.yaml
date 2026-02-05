@@ -1,0 +1,10 @@
+overrides:
+  variables:
+    - name: test12
+      type: Number
+      value: 12342.0
+      required: false
+    - name: test242222r24
+      type: Number
+      value: 12332.0
+      required: false
