@@ -1,0 +1,13 @@
+infrastructureDefinition:
+  name: homelab-remote
+  identifier: homelabremote
+  orgIdentifier: default
+  projectIdentifier: Keshav_project1
+  environmentRef: CDS118303
+  deploymentType: Kubernetes
+  type: KubernetesDirect
+  spec:
+    connectorRef: conn2
+    namespace: default
+    releaseName: release-<+INFRA_KEY_SHORT_ID>
+  allowSimultaneousDeployments: false
