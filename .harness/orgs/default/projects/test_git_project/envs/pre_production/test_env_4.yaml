@@ -1,0 +1,6 @@
+environment:
+  name: test_env_4
+  identifier: test_env_4
+  orgIdentifier: default
+  projectIdentifier: test_git_project
+  type: PreProduction
