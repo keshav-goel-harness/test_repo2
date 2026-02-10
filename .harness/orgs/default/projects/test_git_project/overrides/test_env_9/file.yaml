@@ -1,0 +1,10 @@
+overrides:
+  variables:
+    - name: testfromgit
+      type: Number
+      value: 123444.0
+      required: false
+    - name: test2
+      type: Number
+      value: 1233444.0
+      required: false
