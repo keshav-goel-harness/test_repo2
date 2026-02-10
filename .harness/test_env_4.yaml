@@ -1,6 +1,0 @@
-overrides:
-  variables:
-    - name: kjbkb
-      type: Number
-      value: 241.0
-      required: false
