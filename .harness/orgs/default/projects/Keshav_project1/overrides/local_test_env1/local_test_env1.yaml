@@ -1,0 +1,6 @@
+overrides:
+  variables:
+    - name: v1
+      type: Number
+      value: 67.0
+      required: false
