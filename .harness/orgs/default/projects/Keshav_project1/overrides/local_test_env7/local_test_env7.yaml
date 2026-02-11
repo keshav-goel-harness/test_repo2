@@ -6,5 +6,5 @@ overrides:
       required: false
     - name: test2
       type: Number
-      value: 122233.0
+      value: 1223.0
       required: false
