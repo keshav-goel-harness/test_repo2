@@ -1,0 +1,6 @@
+environment:
+  name: local_test_env5
+  identifier: local_test_env5
+  orgIdentifier: default
+  projectIdentifier: Keshav_project1
+  type: PreProduction
