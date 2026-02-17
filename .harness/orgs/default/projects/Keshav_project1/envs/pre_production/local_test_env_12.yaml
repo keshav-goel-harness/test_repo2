@@ -4,6 +4,7 @@ environment:
   tags:
     abc: ""
     def: ""
+    xyz: ""
   type: PreProduction
   orgIdentifier: default
   projectIdentifier: Keshav_project1
