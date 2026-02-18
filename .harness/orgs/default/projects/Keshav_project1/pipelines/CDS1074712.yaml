@@ -1,0 +1,26 @@
+pipeline:
+  name: CDS-107471-2
+  identifier: CDS1074712
+  projectIdentifier: Keshav_project1
+  orgIdentifier: default
+  tags: {}
+  stages:
+    - stage:
+        name: test
+        identifier: test
+        tags: {}
+        template:
+          templateRef: K8sRemoteTemp
+          versionLabel: v1
+          gitBranch: main1
+          templateInputs:
+            type: Deployment
+            spec:
+              environment:
+                environmentRef: <+input>
+                environmentInputs: <+input>
+                serviceOverrideInputs: <+input>
+                infrastructureDefinitions: <+input>
+              service:
+                serviceRef: <+input>
+                serviceInputs: <+input>
