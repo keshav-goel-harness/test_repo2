@@ -11,7 +11,7 @@ service:
           sources:
             - spec:
                 connectorRef: connector123
-                imagePath: library/nginx
+                imagePath: <+input>
                 tag: <+input>
                 digest: ""
               identifier: artifact
