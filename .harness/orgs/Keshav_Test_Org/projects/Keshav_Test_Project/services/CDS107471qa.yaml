@@ -3,3 +3,24 @@ service:
   identifier: CDS107471qa
   orgIdentifier: Keshav_Test_Org
   projectIdentifier: Keshav_Test_Project
+  serviceDefinition:
+    spec:
+      artifacts:
+        primary:
+          primaryArtifactRef: <+input>
+          sources:
+            - spec:
+                connectorRef: Docker_Hub_Anonymous
+                imagePath: <+input>
+                tag: <+input>
+                digest: ""
+              identifier: artifact
+              type: DockerRegistry
+            - spec:
+                connectorRef: Docker_Hub_Anonymous
+                imagePath: <+input>
+                tag: <+input>
+                digest: ""
+              identifier: artifactory
+              type: DockerRegistry
+    type: Kubernetes
