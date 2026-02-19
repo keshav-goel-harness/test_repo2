@@ -1,0 +1,5 @@
+service:
+  name: CDS-107471-qa
+  identifier: CDS107471qa
+  orgIdentifier: Keshav_Test_Org
+  projectIdentifier: Keshav_Test_Project
