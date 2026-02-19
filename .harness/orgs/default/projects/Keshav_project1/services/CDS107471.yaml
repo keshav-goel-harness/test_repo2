@@ -7,7 +7,7 @@ service:
     spec:
       artifacts:
         primary:
-          primaryArtifactRef: ""
+          primaryArtifactRef: <+input>
           sources:
             - spec:
                 connectorRef: connector123
