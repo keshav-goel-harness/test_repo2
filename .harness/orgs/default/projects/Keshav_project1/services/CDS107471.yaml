@@ -14,10 +14,10 @@ service:
             - spec:
                 connectorRef: connector123
                 imagePath: <+input>
-                tag: <+input>
-                 digest: ""
+                 tag: <+input>
+                digest: ""
               identifier: artifact
-              type: DockerRegistry
+                type: DockerRegistry
             - spec:
                 connectorRef: connector123
                 artifactPath: todolist
