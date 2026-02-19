@@ -3,3 +3,24 @@ service:
   identifier: CDS107471_2
   orgIdentifier: default
   projectIdentifier: Keshav_project1
+  serviceDefinition:
+    spec:
+      artifacts:
+        primary:
+          primaryArtifactRef: <+input>
+          sources:
+            - spec:
+                connectorRef: connector123
+                imagePath: <+input>
+                tag: <+input>
+                digest: ""
+              identifier: artifact
+              type: DockerRegistry
+            - spec:
+                connectorRef: connector123
+                imagePath: <+input>
+                tag: <+input>
+                digest: ""
+              identifier: artifactory
+              type: DockerRegistry
+    type: Kubernetes
