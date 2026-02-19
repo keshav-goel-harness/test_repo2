@@ -15,7 +15,7 @@ service:
                 connectorRef: connector123
                 imagePath: <+input>
                 tag: <+input>
-                digest: ""
+                 digest: ""
               identifier: artifact
               type: DockerRegistry
             - spec:
