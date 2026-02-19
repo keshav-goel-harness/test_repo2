@@ -1,0 +1,5 @@
+service:
+  name: CDS-107471_2
+  identifier: CDS107471_2
+  orgIdentifier: default
+  projectIdentifier: Keshav_project1
