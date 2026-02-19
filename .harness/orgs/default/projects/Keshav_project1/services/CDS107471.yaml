@@ -1,3 +1,4 @@
+service:
   name: CDS-107471
   identifier: CDS107471
   orgIdentifier: default
