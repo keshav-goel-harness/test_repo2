@@ -5,6 +5,8 @@ service:
   projectIdentifier: Keshav_project1
   serviceDefinition:
     spec:
+      release:
+        name: release-<+INFRA_KEY_SHORT_ID>
       artifacts:
         primary:
           primaryArtifactRef: <+input>
@@ -15,5 +17,21 @@ service:
                 tag: <+input>
                 digest: ""
               identifier: artifact
+              type: DockerRegistry
+            - spec:
+                connectorRef: connector123
+                artifactPath: todolist
+                tag: praveen-cv-test
+                repository: docker-local
+                repositoryUrl: https://harness.jfrog.io/ui/repos/tree/General/docker-local
+                repositoryFormat: docker
+              identifier: artifactory
+              type: ArtifactoryRegistry
+            - spec:
+                connectorRef: connector123
+                imagePath: bitnami/vault
+                tag: 1.15.5-debian-11-r12
+                digest: ""
+              identifier: primary
               type: DockerRegistry
     type: Kubernetes
