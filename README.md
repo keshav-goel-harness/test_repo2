@@ -724,3 +724,36 @@ spec:
 here the header on level of route is not considered 
 
 ---
+
+explore this as well Got it — Confluence should have **no class names, no file paths, no code blocks**. Pure logic descriptions in prose and tables only.
+
+Let me finalize the plan:
+
+Here's the final plan:
+
+### Local spec (`istio-vs-merge-tech-spec.md`) — 5 changes
+
+**1. Merge Priority Table** — update the `spec.http[].route` row and add destination-level headers row:
+
+4. SMI — Not Implemented
+For SMI (SMITrafficRoutingResourceCreator), the merge logic will not be implemented. If a customer provides a VirtualService/TrafficSplit in their manifest and uses SMI traffic routing, Harness will follow the current behavior (create from scratch). This can be revisited later.
+
+Implementation: In SMITrafficRoutingResourceCreator, the mergeWithExistingManifest method (if added to the base class) will simply return Optional.empty(), causing the flow to fall back to the existing creation behavior.
+
+5. Detailed Design 
+
+on line 7059 can look if different from the rest
+
+
+
+
+
+one ablve this All 14 are solid. Good to go! 👍 looks right
+
+**User**
+
+find matching customer HTTP route by namei think this name is optional in virtualservice? i remember wells fargo was complaining about this and asking us to make it optional. our step config has it always but their manifest may not have it
+
+but if we dont have how we will compare
+
+---
