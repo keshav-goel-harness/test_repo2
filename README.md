@@ -140,3 +140,20 @@ This is a critical distinction:
 | **Who manages it** | kube-proxy / iptables | Envoy sidecar proxy (injected by Istio) |
 
 // more detail in the shubh wala doc
+
+1. **VirtualService sits on top of K8s Services** — K8s Services still handle service discovery (DNS → pods), but VirtualService **intercepts and controls** how traffic is actually routed between them.
+
+2. **Harness creates 2 services during canary** — The primary/stable service already exists. Harness automatically creates a **canary service** (a clone of the primary) that points to the canary pods. You can see this in the code:
+
+### Summary of the issue (no solution bias)
+
+| What | Detail |
+|------|--------|
+| **FF active** | `CDS_DISABLE_FABRIC8_NG = true` → `kubernetesConfig = null` → non-Fabric8 `KubernetesResource` path |
+| **What's happening** | Header `match` rules in the VirtualService are being stripped out during the canary deployment flow |
+| **When** | During `kubectl apply` of a VirtualService that was rebuilt from the step configuration |
+| **Root area** | Every time a traffic routing or canary deploy step runs, the VirtualService is **recreated from config** (not patched in-place). If the config round-trip loses headers, they disappear from the cluster |
+| **Impact** | Production outage — traffic routing rules that depended on headers (e.g., "route to canary only if header `x-env: canary` is present") stop working, causing uncontrolled traffic distribution |
+
+The core tension is: **patches preserve headers** (they only touch `/spec/http/{i}/route`), but **recreations from config** may lose headers if the config serialization/deserialization has any issue.
+
