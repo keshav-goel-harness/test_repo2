@@ -157,3 +157,9 @@ This is a critical distinction:
 
 The core tension is: **patches preserve headers** (they only touch `/spec/http/{i}/route`), but **recreations from config** may lose headers if the config serialization/deserialization has any issue.
 
+| Customer does... | Legacy path fires? | Traffic Routing path fires? |
+|---|---|---|
+| Includes VirtualService in manifests with `managed: true` annotation, no Traffic Routing config in step | ✅ Yes — modifies their VS routes | ❌ No — `trafficRoutingConfig` is null |
+| Configures Traffic Routing (Istio) in the step UI, no VS in manifests | ❌ No — no managed VS found in manifests | ✅ Yes — creates new VS from config |
+| Both (VS in manifests AND Traffic Routing in step) | ✅ Yes — modifies manifest VS | ✅ Yes — also creates a new VS (⚠️ potential conflict) |
+| Neither | ❌ Skips | ❌ Skips |
