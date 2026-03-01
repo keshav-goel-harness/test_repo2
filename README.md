@@ -631,3 +631,94 @@ THIS IS ABSOLUTELY CRITICAL continued in the parent DOC
 
 **Location**: New method in `IstioTrafficRoutingResourceCreator`
 
+**User**
+
+in the tech spec for legact we check for ttrafficRoutingConfig == null but this is not correct. 
+beacuse the even now ehn trafficrouting is there it runs correct. 
+only check i can thing is FF enable but still i want ot disuccc saround this legacy flows
+
+---
+
+## My Recommendation
+
+1. **Don't skip legacy flow** — remove the `trafficRoutingConfig == null` check from the tech spec
+2. **No new FF needed** just for skipping legacy
+3. The entire fix lives inside `prepareForTrafficRouting()` — the merge logic. Legacy continues to run as-is.
+
+
+**Key point**: The legacy flow **only operates on VirtualServices with `harness.io/managed: "true"` annotation**. It filters using `.filter(KubernetesResource::isManaged)`. If no VS has this annotation, the legacy flow **returns immediately and does nothing**.
+
+### Decision: Keep Legacy Flow As-Is
+
+- **No `trafficRoutingConfig == null` guard** — the legacy flow runs correctly alongside traffic routing
+- **No FF needed** to control legacy — it's a no-op in the common case (customer VS lacks `managed: true`)
+- **DestinationRule update** also only processes `managed: true` DRs — same harmless behavior
+- Legacy flow continues to serve users who rely on subset-based routing WITHOUT traffic routing configured
+
+**The entire fix lives solely inside `prepareForTrafficRouting()` — the merge logic.**
+
+---
+## 4. SMI — Not Implemented
+
+For **SMI** (`SMITrafficRoutingResourceCreator`), the merge logic will **not** be implemented. If a customer provides a VirtualService/TrafficSplit in their manifest and uses SMI traffic routing, Harness will follow the **current behavior** (create from scratch). This can be revisited later.
+
+Implementation: In `SMITrafficRoutingResourceCreator`, the `mergeWithExistingManifest` method (if added to the base class) will simply return `Optional.empty()`, causing the flow to fall back to the existing creation behavior.
+
+
+
+## 5. Detailed Design
+
+### 5.1 Detection: Find Customer VS in Manifest Resources
+
+**Location**: New method in `IstioTrafficRoutingResourceCreator`
+
+```java
+Optional<KubernetesResource> findExistingVirtualService(
+
+..
+
+.
+.............
+
+
+12. Open Questions
+Should we log a warning when merging? Proposed: Yes, log "Found existing VirtualService [name] in manifest. Merging with step-level traffic routing configuration." so users can trace the behavior.
+Should we validate that customer's VS apiVersion is compatible? Proposed: Yes, check that the customer's VS apiVersion is one of the supported versions (networking.istio.io/v1beta1, networking.istio.io/v1alpha3). If not, log error and fall back to create.
+Should the merged VS retain harness.io/direct-apply annotation? Proposed: Yes, preserve all customer annotations. Harness adds its own annotations on top.
+
+
+line 6226
+
+**User**
+
+okay so i understood , 
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: reviews-route
+spec:
+  hosts:
+  - reviews.prod.svc.cluster.local
+  http:
+  - headers:
+      request:
+        set:
+          test: "true"
+    route:
+    - destination:
+        host: reviews.prod.svc.cluster.local
+        subset: v2
+      weight: 25
+    - destination:
+        host: reviews.prod.svc.cluster.local
+        subset: v1
+      headers:
+        response:
+          remove:
+          - foo
+      weight: 75
+
+
+here the header on level of route is not considered 
+
+---
