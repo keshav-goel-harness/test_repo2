@@ -163,3 +163,471 @@ The core tension is: **patches preserve headers** (they only touch `/spec/http/{
 | Configures Traffic Routing (Istio) in the step UI, no VS in manifests | ❌ No — no managed VS found in manifests | ✅ Yes — creates new VS from config |
 | Both (VS in manifests AND Traffic Routing in step) | ✅ Yes — modifies manifest VS | ✅ Yes — also creates a new VS (⚠️ potential conflict) |
 | Neither | ❌ Skips | ❌ Skips |
+
+User
+
+no customer is ising harness traffic routing as per pipeline so header stripping can be possbile
+
+### If Customer Provides VS in Manifest → Legacy Flow
+
+- Harness **auto-detects** the VS in the manifests
+- `IstioTaskHelper` only modifies `spec.http[0].route` (the route weights)
+- Customer's `http[0].headers`, `match`, etc. all stay **untouched** as siblings in the underlying Map
+- **No need** to configure Harness Traffic Routing in the step
+- ✅ Headers preserved
+
+### If Customer Uses Harness Traffic Routing → Creation Flow
+
+- Harness **creates VS from scratch** using `IstioTrafficRoutingResourceCreator.getManifests()`
+- The VS is built from `VirtualServiceDetails` which only has: `name`, `match`, `rewrite`, `route`
+- **No `headers` field** → the created VS simply **cannot** have `HTTPRoute.headers`
+- This VS gets applied to the cluster → if any existing VS with headers was there, it's **overwritten**
+- ❌ Headers either never existed or are lost
+
+Since they're using **Harness Traffic Routing**, the problem is at **initial VS creation** time:
+
+1. Harness creates the VS → no `headers` field in the model → VS has no headers
+2. This VS is applied to cluster → replaces whatever was there before
+3. Customer's `HTTPRoute.headers` (like `request.set.Content-Type: application/json`) are simply **not representable** in Harness's `VirtualServiceDetails` model
+
+So your understanding is spot on — the issue is fundamentally that the Harness Traffic Routing creation path **doesn't have a way to include `HTTPRoute.headers`** in the VirtualService it builds.
+
+```plaintext
+{ "op": "replace", "path": "/spec/http/0/route", "value": [...] }
+```
+updateVirtualServiceManifestFilesWithRoutes only updates existing VirtualServices. It does NOT create anything. The creation happens in a completely different method. Here's the exact sequence in K8sCanaryRequestHandler.executeTaskInternal():
+
+Step 2: prepareForTrafficRouting() (line 158) — ⚠️ THIS is where creation happens
+
+Since customer has Harness Traffic Routing configured (trafficRoutingConfig != null), this method runs
+It calls createTrafficRoutingResources() → CREATES a brand new VirtualService from scratch
+The new VS name comes from k8sTrafficRoutingConfig.getResourceName() (what the customer entered in the pipeline Traffic Routing config)
+New VS is built using VirtualServiceDetails model → NO headers field
+Adds the newly created VS to the SAME kubernetesResources list (line 481)
+Step 3: applyManifests() (line 185)
+
+    String manifestYaml = ManifestHelper.toYaml(resources);
+    K8sTelemetryReporter.handleFinalManifest(manifestYaml);
+    FileIo.writeUtf8StringToFile(k8sDelegateTaskParams.getWorkingDirectory() + "/manifests.yaml", manifestYaml);
+ManifestHelper.toYaml (line 288-299) simply concatenates ALL resources:
+
+
+okay so yiou are saying if we add virtual-service-<+service.name> differently here in traffic routing step this could have been avoided and will the traffic shift work in that case
+
+
+1. Would a different name avoid the header stripping?
+Yes, technically — if the customer used a different name like virtual-service-esignature in the Harness Traffic Routing config (instead of aoesn-esignature-vs), then kubectl apply would see them as two separate resources. The customer's original VS (aoesn-esignature-vs with headers) would NOT get overwritten.
+
+2. Would traffic shifting still work?
+This is where it gets problematic. You'd now have two VirtualServices in the cluster:
+
+VS	Name	Hosts	Gateway	Headers	Routes
+Customer's	aoesn-esignature-vs	aoesn-esignature-mtls-sitr-heritage-avi.docp.wellsfargo.net	aoesn-esignature-gw	✅ Content-Type: application/json	esignature-svc (100%) / esignature-svc-canary (0%)
+Harness-created	virtual-service-esignature	(whatever configured in TR config)	(whatever configured in TR config)	❌ None	esignature-svc (100%) / esignature-svc-canary (0%)
+Now there are two scenarios:
+
+Scenario A: Harness VS has the SAME host + gateway
+Istio now sees two VirtualServices for the same host/gateway combo
+Istio merges them, but the merge order is non-deterministic (based on creation timestamp, namespace, etc.)
+Traffic could hit either VS's routing rules unpredictably
+Some requests get headers set, some don't
+This is dangerous and unstable — Istio docs explicitly warn about conflicting VirtualServices for the same host
+Scenario B: Harness VS has DIFFERENT host / gateway
+The Harness VS would be routing different traffic entirely
+Traffic shifting (changing weights on the Harness VS) wouldn't affect the customer's actual production traffic at all
+The customer's VS (aoesn-esignature-vs) still has hardcoded weights (100/0) — traffic shifting doesn't work
+
+---
+
+Bottom line
+Using a different name is not a clean workaround because:
+
+Same host/gateway → unpredictable Istio merge behavior, production risk
+Different host/gateway → traffic shift doesn't affect the actual traffic the customer cares about
+The real problem is that when Harness Traffic Routing is enabled alongside a customer-provided VS with the same name, the prepareForTrafficRouting method creates a new VS from scratch using the VirtualServiceDetails model that lacks support for HTTPRoute.headers, and it overwrites the customer's VS on apply. The fix needs to happen in the code itself.
+
+Shall we move to the solution part now?
+
+### Root Cause Recap
+When Harness Traffic Routing is enabled and the customer also provides a VS in their manifest with the same name, `prepareForTrafficRouting()` creates a **brand new VS from scratch** (using `VirtualServiceDetails` which lacks `headers` support) and adds it to the resources list. On `kubectl apply`, the Harness-created VS (without headers) overwrites the customer's VS (with headers).
+
+### Approach: **"Update in place if VS exists, create only if it doesn't"**
+
+Instead of always creating a new VS from scratch, **check if a VS with the same name already exists in the manifests list** — and if it does, update its route destinations in place.
+
+### The flow would become: (can find it in parent) 
+
+Option 1: Inherit VS as-is, bypass step-level config
+→ "If customer has a VS, just use it — ignore whatever traffic routing config is in the deploy step" → Problem: No weight adjustment happens at all during canary deploy. The VS stays at 100/0.
+
+Option 2: Inherit VS + merge with step-level config ← My solution
+→ "Take the customer's existing VS, keep all its fields (headers, match, etc.), but update the route weights based on the traffic routing config" → This is what I proposed — "update in place if VS exists" → Risk: Merge logic could go wrong (e.g., customer has multiple HTTP routes, matching the right one to update weights is non-trivial)
+
+Option 3: Only patch via separate Traffic Routing step
+→ "Don't touch VS in the Canary Deploy step at all. Let the user add a separate Traffic Routing step which uses the INHERIT path" → The INHERIT path already works correctly — it generates a JSON patch on /spec/http/N/route which only replaces the route array and naturally preserves headers and all sibling fields → Limitation: Users must add a separate Traffic Routing step. Can't configure routing directly in the Canary Deploy step.
+
+## Honest assessment:
+
+**Option 3 is actually the safest** approach because:
+- JSON patches are surgical and well-tested (the `INHERIT` path already works)
+- Zero merge risk
+- The customer fully owns their VS
+- No model changes, no complex merge logic
+
+**Option 2 (mine) is more user-friendly** but carries the merge risk the ticket mentions — correctly matching HTTP routes, handling edge cases with multiple routes, etc.
+
+For a customer like Wells Fargo facing an **outage**, Option 3 is the fastest and safest path — just restructure the pipeline to use a separate Traffic Routing step with `INHERIT`, which already preserves headers. The code change is minimal (skip VS creation when customer provides their own).
+
+Which option does the team want to go with? Or should we dig deeper into the implementation of any specific one?
+
+---
+**User**
+
+what i think in option 1 that we solely no rely on customer VS and we dont need harness trqaffic shift anymore. 
+in option 3 we just patch the VS data needed we may need harness traffic shift to get data whcihn need to be patched
+
+in option 2 on the other hand we read VS from customer and then we see step level traffic data and then step by step merge them to get 1 data
+
+---
+
+## Option 1: Customer fully owns the VS
+
+```
+Customer's Manifest (VS with headers, weights, match, everything)
+         │
+         ▼
+    kubectl apply (as-is, Harness doesn't touch it)
+         │
+         ▼
+    Traffic shifting? Customer handles it themselves
+    (e.g., kubectl patch in a Shell Script step, or ArgoCD, or manual)
+    
+    Harness Traffic Routing step = NOT NEEDED
+```
+
+- Harness is just a deployment tool here — it applies what the customer gives
+- **Zero Harness involvement** in traffic management
+- Customer has full control AND full responsibility
+
+---
+
+## Option 3: Customer owns the VS, Harness only patches weights
+
+```
+Customer's Manifest (VS with headers, weights, match, everything)
+         │
+         ▼
+    Canary Deploy Step: kubectl apply (as-is, don't create new VS)
+         │
+         ▼
+    Harness Traffic Routing Step (INHERIT mode):
+         │
+         ├── Reads VS from cluster (customer's VS)
+         ├── Generates JSON patch: /spec/http/0/route/0/weight → 80
+         │                         /spec/http/0/route/1/weight → 20
+         └── kubectl patch (surgical, only touches weights)
+         
+    Headers, match, rewrite = UNTOUCHED ✅
+    Harness Traffic Routing step = NEEDED (for patching weights)
+```
+
+- Customer owns the VS structure
+- Harness **only** patches the specific weight values it needs
+- Harness needs to know **which fields to patch** → that data comes from the Traffic Routing step config
+
+---
+
+## Option 2: Read customer VS + read step config → merge into one
+
+```
+Customer's Manifest          Step-level Traffic Config
+(VS with headers, match)     (weights, destinations)
+         │                            │
+         └──────────┬─────────────────┘
+                    ▼
+              MERGE LOGIC
+         ┌──────────────────┐
+         │ Take from customer: │
+         │  - headers         │
+         │  - match rules     │
+         │  - gateways        │
+         │  - hosts           │
+         │                    │
+         │ Take from step:    │
+         │  - route weights   │
+         │  - destinations    │
+         └──────────────────┘
+                    │
+                    ▼
+           Merged VS (has everything)
+                    │
+                    ▼
+             kubectl apply
+             
+    Harness Traffic Routing step = NOT NEEDED (merge happens in deploy step itself)
+```
+
+- Both data sources combined into one
+- **Riskiest** — merge logic is complex (what if customer has 3 HTTP routes? which one gets weight update?)
+- But **best UX** — customer doesn't need to restructure pipeline
+
+---
+
+## Summary
+
+| | Who owns VS? | Who shifts traffic? | Pipeline change needed? | Risk |
+|---|---|---|---|---|
+| **Option 1** | Customer 100% | Customer (shell script etc.) | Yes — remove Harness TR step, add custom script | None |
+| **Option 2** | Shared (merge) | Harness (in deploy step) | No — works as-is | ⚠️ Merge bugs |
+| **Option 3** | Customer (structure) + Harness (weights only) | Harness (via TR step with patch) | Maybe — need TR step with INHERIT | Low |
+
+Is this clear? Which option do you want to dig into for implementation?
+
+```plaintext
+Customer's Manifest (VS with headers, weights, match, everything)
+         │
+         ▼
+    kubectl apply (as-is, Harness doesn't touch it)
+         │
+         ▼
+    Traffic shifting? Customer handles it themselves
+    (e.g., kubectl patch in a Shell Script step, or ArgoCD, or manual)
+    
+    Harness Traffic Routing step = NOT NEEDED
+```
+
+```plaintext
+Customer's Manifest (VS with headers, weights, match, everything)
+         │
+         ▼
+    Canary Deploy Step: kubectl apply (as-is, don't create new VS)
+         │
+         ▼
+    Harness Traffic Routing Step (INHERIT mode):
+         │
+         ├── Reads VS from cluster (customer's VS)
+         ├── Generates JSON patch: /spec/http/0/route/0/weight → 80
+         │                         /spec/http/0/route/1/weight → 20
+         └── kubectl patch (surgical, only touches weights)
+         
+    Headers, match, rewrite = UNTOUCHED ✅
+    Harness Traffic Routing step = NEEDED (for patching weights)
+```
+
+```plaintext
+Customer's Manifest          Step-level Traffic Config
+(VS with headers, match)     (weights, destinations)
+         │                            │
+         └──────────┬─────────────────┘
+                    ▼
+              MERGE LOGIC
+         ┌──────────────────┐
+         │ Take from customer: │
+         │  - headers         │
+         │  - match rules     │
+         │  - gateways        │
+         │  - hosts           │
+         │                    │
+         │ Take from step:    │
+         │  - route weights   │
+         │  - destinations    │
+         └──────────────────┘
+                    │
+                    ▼
+           Merged VS (has everything)
+                    │
+                    ▼
+             kubectl apply
+             
+    Harness Traffic Routing step = NOT NEEDED (merge happens in deploy step itself)
+```
+**User**
+
+1 follow up question even right now /Users/shubh/harness/harness-core/125-cd-nextgen/src/main/java/io/harness/cdng/k8s/trafficrouting/K8sTrafficRoutingRule.java 
+/Users/shubh/harness/harness-core/125-cd-nextgen/src/main/java/io/harness/cdng/k8s/trafficrouting/K8sTrafficRoutingRoute.java
+we ask all this data so why we patch only weight and destination all can come from bith place and we need to chose which to take 
+
+---
+
+
+## Summary: CDS-118276 — Header Configuration in K8s Canary Deploy Step Gets Removed
+
+---
+
+### Problem Statement
+
+Wells Fargo customer provides an Istio **VirtualService** in their manifest with `HTTPRoute.headers` for request/response manipulation (e.g., `Content-Type: application/json`). After the Canary Deploy step runs, these headers are **completely stripped**, causing an outage.
+
+---
+
+### Customer's Setup
+
+- **Manifest**: Contains a VirtualService with annotations `harness.io/direct-apply: "true"` and `harness.io/primary-service: "true"` (but **NOT** `harness.io/managed: "true"`)
+- **Pipeline**: Uses **Harness Traffic Routing** (Istio provider) configured in the Canary Deploy step
+- **Feature Flag**: `CDS_DISABLE_FABRIC8_NG = true` (Fabric8 disabled)
+
+---
+
+### Root Cause (Two-Part)
+
+**Part 1 — Legacy Flow Skips Customer's VS**
+
+`IstioTaskHelper.updateVirtualServiceManifestFilesWithRoutes()` filters for `isManaged()` (checks for `harness.io/managed: "true"` annotation). Since the customer's VS lacks this annotation, the legacy flow **completely skips** it — no update, no harm, but also no traffic routing through this path.
+
+**Part 2 — Harness Creates a Duplicate VS That Overwrites**
+
+Since Harness Traffic Routing is enabled in the pipeline, `K8sCanaryRequestHandler` calls `prepareForTrafficRouting()` → `IstioTrafficRoutingResourceCreator.createTrafficRoutingResources()`, which **creates a brand-new VirtualService from scratch**. 
+
+This new VS is built using `VirtualServiceDetails`, a model that supports:
+- ✅ `name`, `match` (routing rules), `rewrite`, `route` (destinations + weights)
+- ❌ **`HTTPRoute.headers`** (request/response header manipulation) — **NOT in the model**
+
+If this Harness-created VS has the **same name** as the customer's VS, `kubectl apply` **overwrites** the customer's original VS, stripping `HTTPRoute.headers` entirely.
+
+---
+
+### Two Different "Headers" — Key Distinction
+
+| Istio Feature | Where in VS | What It Does | In Harness Model? |
+|---|---|---|---|
+| `match.headers` | Under `match` | Routing **condition** (route if header matches) | ✅ Yes — collected as `RuleType.HEADERS` in step config |
+| `HTTPRoute.headers` | Sibling of `match` and `route` | Request/response header **manipulation** (set/add/remove) | ❌ **No** — not in `VirtualServiceDetails`, not in step config |
+
+The customer uses `HTTPRoute.headers` (manipulation), which has no representation anywhere in Harness's data model.
+
+---
+
+### Data Flow: What's Collected vs What's Used
+
+| Data | Collected at Step Level? | Used During VS Creation? | Used During Patching (Traffic Shift)? |
+|---|---|---|---|
+| Destinations (host, weight, port) | ✅ | ✅ | ✅ (only weights) |
+| Match rules (URI, method, scheme, authority, port) | ✅ | ✅ (becomes `match`) | ❌ (but safe — JSON patch on `/spec/http/%d/route` doesn't touch `match`) |
+| Match headers (header-based routing condition) | ✅ | ✅ (becomes `match.headers`) | ❌ (safe — untouched by patch) |
+| Rewrite rule | ✅ | ✅ (becomes `rewrite`) | ❌ (safe — untouched by patch) |
+| **`HTTPRoute.headers`** (request/response manipulation) | ❌ | ❌ | ❌ |
+
+During **patching** (INHERIT flow), only `/spec/http/%d/route` is replaced — a surgical JSON patch that wouldn't strip headers. The problem is exclusively in the **creation** flow where `kubectl apply` overwrites the entire VS.
+
+---
+
+### Solution Options
+
+#### Option 1: Inherit Customer's VS As-Is
+- Harness does **not** create its own VS if one exists in the manifest
+- Customer's VS is applied directly, preserving all fields including `HTTPRoute.headers`
+- **Limitation**: No traffic shifting in the Canary Deploy step itself; requires a separate Traffic Routing step for weight changes
+- Step-level traffic routing config (rules, destinations) is **entirely bypassed**
+
+#### Option 2: Inherit Customer's VS + Merge with Step Config
+- Read customer's VS as the base, then merge step-level config into it
+- **Limitation**: When customer provides VS, step-level rules/match/rewrite become **dead config** (only weights matter from the step). Merging two independently authored routing configs is inherently risky and complex
+- Creates a confusing UX — user configures rules in the step, but they get ignored
+
+#### Option 3: Only Patch VS via Traffic Routing Step
+- Customer fully owns the VS (creates and manages it in their manifest)
+- Harness only patches the VS using surgical JSON patches (e.g., update weights at `/spec/http/%d/route`)
+- **Limitation**: Cannot specify traffic routing config in Canary Deploy step; requires a separate Traffic Routing step
+- **Most honest approach** — clearly separates "VS ownership" (customer) from "traffic shifting" (Harness)
+
+---
+
+### Recommendation
+
+**Option 3** is the safest and cleanest:
+- No risk of overwriting customer data
+- Surgical JSON patching preserves all fields Harness doesn't understand (`HTTPRoute.headers`, future Istio features)
+- Clear separation of concerns
+- Already partially supported — the `INHERIT` patching flow already patches only weights
+
+**Option 1** is essentially Option 3 without the patching — simpler but less useful (no Harness-managed traffic shifting at all).
+
+**Option 2** is the most complex with the least benefit — the merge adds risk while the step-level rules become redundant when a customer provides their own VS.
+
+---
+
+
+**User**
+
+okay so now we need to make a tech spec to fix this issue with all the information in hand. 
+
+the solution which we are chosing is option 2 where we need merge the information. 
+also we give preference to step level inforamtion while merging beacuse customer have added the traffic routing step for a reason and they want to VS to be updated accordingingly. 
+
+In case we have 1 or more than VS we always merge based on resource name because customer may provide base level VS in manifest and then want harness to handle the complexity of traffic in the step. 
+
+First based on our last discussion so far. make a plan and rigt now we dont want to make code changes our agenda is to make proper tech spec to cover everything. Also i want your suggestion for finding any corner cases which i may have missing so far here in explanation. 
+
+
+---
+
+**Analysis**: The legacy flow uses `setField("spec.http[0].route", ...)` which only replaces the `route` key within the `http[0]` map. Sibling keys like `headers` are **technically preserved** at the YAML level. However, the legacy flow still causes problems when combined with traffic routing:
+
+| Issue | Description |
+|---|---|
+| **Placeholder expressions** | Legacy flow replaces route destinations with `${STABLE_DESTINATION}` / `${CANARY_DESTINATION}` expressions (subset-based). Traffic routing uses actual service names (service-based). Conflicting models. |
+| **Validation errors** | Legacy's `validateRoutesInVirtualService` throws `"Only one route is allowed in VirtualService"` if customer has multiple HTTP routes. Traffic routing supports multiple routes. |
+| **Double processing** | Legacy modifies the VS first, then merge logic reads the already-modified VS with placeholder expressions → confusion. |
+| **Subset vs service routing** | Legacy assumes subset-based routing with DestinationRule subsets. Traffic routing uses separate services (stable-svc / canary-svc). Mixing them is undefined behavior. |
+
+
+### Decision: Skip Both Legacy Calls When `trafficRoutingConfig != null`
+
+```java
+// PROPOSED CHANGE in K8sCanaryRequestHandler.init()
+if (request.getTrafficRoutingConfig() == null) {
+    // Legacy flow: only when no Harness Traffic Routing is configured
+    k8sCanaryBaseHandler.updateDestinationRuleManifestFilesWithSubsets(
+        resources, request.isDisableFabric8() ? null : k8sCanaryHandlerConfig.getKubernetesConfig(), logCallback);
+    k8sCanaryBaseHandler.updateVirtualServiceManifestFilesWithRoutes(
+        resources, request.isDisableFabric8() ? null : k8sCanaryHandlerConfig.getKubernetesConfig(), logCallback);
+}
+```
+
+**Why also skip DestinationRule update**: The traffic routing flow uses **service-based routing** (routes to different K8s Services like `esignature-svc` and `esignature-svc-canary`). It does **not** use subsets. Updating DestinationRule subsets for subset-based routing is unnecessary and potentially conflicting.
+
+**Impact on non-traffic-routing users**: Zero. The `if` guard ensures legacy flow still runs when `trafficRoutingConfig == null`.
+
+---
+
+## 4. SMI — Not Implemented
+
+For **SMI** (`SMITrafficRoutingResourceCreator`), the merge logic will **not** be implemented. If a customer provides a VirtualService/TrafficSplit in their manifest and uses SMI traffic routing, Harness will follow the **current behavior** (create from scratch). This can be revisited later.
+
+Implementation: In `SMITrafficRoutingResourceCreator`, the `mergeWithExistingManifest` method (if added to the base class) will simply return `Optional.empty()`, causing the flow to fall back to the existing creation behavior.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+THIS IS ABSOLUTELY CRITICAL continued in the parent DOC 
+## 5. Detailed Design
+
+### 5.1 Detection: Find Customer VS in Manifest Resources
+
+**Location**: New method in `IstioTrafficRoutingResourceCreator`
+
