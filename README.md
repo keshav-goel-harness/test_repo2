@@ -71,3 +71,72 @@ It creates **completely new `HTTPRouteDestination` objects** from scratch — on
 
 The VirtualService is **deserialized from YAML → Fabric8 Java object → modified → serialized back**. If the Fabric8 `VirtualService` model does NOT fully support all fields (like `headers` in `match`), those fields get **silently dropped** during deserialization/serialization.
 
+### Path B — The KubernetesResource path (when `disableFabric8 = true`)
+
+```277:305:harness-core/930-delegate-tasks/src/main/java/io/harness/delegate/task/k8s/istio/IstioTaskHelper.java
+  public void updateVirtualServiceWithDestinationWeights(List<IstioDestinationWeight> istioDestinationWeights,
+      KubernetesResource virtualService, LogCallback executionLogCallback) throws IOException {
+    // ...
+      virtualService.setField(
+          "spec.http[0].route", generateDestinationWeights(istioDestinationWeights, host, portNumber));
+    }
+  }
+```
+
+This path uses `setField("spec.http[0].route", ...)` which **only replaces the `route` sub-field** within the first HTTP entry. This would preserve `match`/`headers` since they live at the same level as `route` (siblings under `http[0]`), not under `route`.
+
+### Path C — New Traffic Routing (IstioTrafficRoutingResourceCreator)
+
+The newer traffic routing approach uses JSON **patches** targeting specifically `/spec/http/{index}/route`:
+
+```504:506:harness-core/930-delegate-tasks/src/main/java/io/harness/delegate/k8s/trafficrouting/IstioTrafficRoutingResourceCreator.java
+              patches.add(format(PATCH_REPLACE_JSON_FORMAT, format(HTTP_ROUTE_TYPE_ROUTE_DESTINATION_PATH, i),
+                  // ...
+```
+
+This generates a JSON patch like:
+```json
+{ "op": "replace", "path": "/spec/http/0/route", "value": [...] }
+```
+
+This **only patches the `route` field**, leaving `match`, `headers`, `name`, `rewrite` etc. untouched. This path should be safe.
+
+---
+
+## 3. How Traffic Shifting Works
+
+During canary deployment:
+
+1. **K8sCanaryDeploy step**: Sets initial weights → `stable: 100`, `canary: 0` (the manifest is modified before being applied with `kubectl apply`)
+2. **Traffic Shift step(s)**: Updates weights progressively → e.g., `stable: 80, canary: 20` → `stable: 50, canary: 50`
+3. **Final shift**: `stable: 100, canary: 0` and canary pods deleted
+
+---
+
+## 4. Root Cause of the Bug (CDS-118276)
+
+The issue is in the **Fabric8 serialization path** in `IstioTaskHelper`:
+
+1. Customer has a VirtualService with `match.headers` configured
+2. During K8sCanaryDeploy, the code deserializes the YAML → Fabric8 `VirtualService` Java object
+3. The Fabric8 model either:
+   - **Does not map all fields** from the HTTPRoute (e.g., `match`, `headers` may be lost if the Fabric8 model version is outdated or incomplete), OR
+   - The `setRoute()` call **replaces** the route array, and then when the entire VirtualService is **serialized back to YAML** via `Serialization.asYaml()`, the `match` block that was present is preserved in the object **but** could be dropped if there's a Fabric8 model mismatch
+
+More critically — **the `validateRoutesInVirtualService()` enforces "only one route is allowed"** (line 196-198). If the customer has **multiple HTTP routes** (one for header-matched traffic, one for default), this validation would **reject** the VirtualService entirely.
+
+---
+## 3. How VirtualService is Different from a Normal K8s Service
+
+This is a critical distinction:
+
+| Aspect | K8s Service | Istio VirtualService |
+|--------|-------------|---------------------|
+| **What it is** | A basic **load balancer** / **DNS entry** for a set of pods | An **advanced traffic routing policy** |
+| **Layer** | Works at **L4** (TCP/IP) level | Works at **L7** (HTTP) level — understands headers, URIs, methods |
+| **Traffic split** | ❌ Cannot split traffic by percentage | ✅ Can split: 80% to v1, 20% to v3 |
+| **Header-based routing** | ❌ Cannot route based on HTTP headers | ✅ Can say "if header `x-canary: true`, send to v3" |
+| **How it routes** | Simple round-robin across all pods matching the label selector | Weighted, rule-based, conditional routing |
+| **Who manages it** | kube-proxy / iptables | Envoy sidecar proxy (injected by Istio) |
+
+// more detail in the shubh wala doc
