@@ -1,0 +1,21 @@
+service:
+  name: CDS-120330-qa2
+  identifier: CDS120330qa2
+  orgIdentifier: Keshav_Test_Org
+  projectIdentifier: Keshav_Test_Project
+  serviceDefinition:
+    spec:
+      manifests:
+        - manifest:
+            identifier: m
+            type: K8sManifest
+            spec:
+              store:
+                type: Harness
+                spec:
+                  files:
+                    - /nginx_basic_deployment.yaml
+              optionalValuesYaml: false
+              skipResourceVersioning: false
+              enableDeclarativeRollback: false
+    type: Kubernetes
