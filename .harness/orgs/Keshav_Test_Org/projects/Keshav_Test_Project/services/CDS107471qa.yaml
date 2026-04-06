@@ -7,12 +7,12 @@ service:
     spec:
       artifacts:
         primary:
-          primaryArtifactRef: <+input>
+          primaryArtifactRef: artifact
           sources:
             - spec:
                 connectorRef: Docker_Hub_Anonymous
-                imagePath: <+input>
-                tag: <+input>
+                imagePath: library/alpine
+                tag: "3.23"
                 digest: ""
               identifier: artifact
               type: DockerRegistry
