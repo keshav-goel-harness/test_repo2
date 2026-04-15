@@ -3,4 +3,4 @@ environment:
   identifier: CDS119142
   orgIdentifier: Keshav_Test_Org
   projectIdentifier: Keshav_Test_Project
-  type: PreProduction
+  type: Production
