@@ -1,0 +1,6 @@
+environment:
+  name: env123
+  identifier: env123
+  orgIdentifier: default
+  projectIdentifier: Keshav_project1
+  type: PreProduction
