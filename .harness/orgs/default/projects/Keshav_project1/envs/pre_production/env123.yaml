@@ -1,6 +1,6 @@
 environment:
   name: env123
   identifier: env123
-  orgIdentifier: default
+  orgIdentifier: defaultt
   projectIdentifier: Keshav_project1
   type: Production
