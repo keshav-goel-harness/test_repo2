@@ -1,0 +1,12 @@
+service:
+  name: test-svc
+  identifier: test_svc
+  serviceDefinition:
+    type: Kubernetes
+    spec:
+      variables:
+        - name: MY_SECRET
+          type: Secret
+          value: GH_PAT_for_FernandoD_on_AWS
+  orgIdentifier: Keshav_Test_Org
+  projectIdentifier: Keshav_Test_Project
