@@ -1,0 +1,19 @@
+infrastructureDefinition:
+  name: infra2_for_nyl_cfd
+  identifier: infra2_for_nyl_cfd
+  orgIdentifier: default
+  projectIdentifier: Keshav_project1
+  environmentRef: nyl_cfd_repro
+  deploymentType: CustomDeployment
+  type: CustomDeployment
+  spec:
+    customDeploymentRef:
+      templateRef: MuleSoftTemplate
+      versionLabel: v1.1
+    variables:
+      - name: clusterUrl
+        type: String
+        description: ""
+        required: false
+        value: <+input>
+  allowSimultaneousDeployments: false
