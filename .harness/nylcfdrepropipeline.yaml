@@ -1,0 +1,39 @@
+pipeline:
+  name: nyl-cfd-repro-pipeline
+  identifier: nylcfdrepropipeline
+  projectIdentifier: Keshav_project1
+  orgIdentifier: default
+  tags: {}
+  stages:
+    - stage:
+        name: s1
+        identifier: s1
+        description: ""
+        type: Deployment
+        spec:
+          deploymentType: CustomDeployment
+          customDeploymentRef:
+            templateRef: MuleSoftTemplate
+            versionLabel: v1.1
+          service:
+            serviceRef: MuleService
+          execution:
+            steps:
+              - step:
+                  name: Fetch Instances
+                  identifier: fetchInstances
+                  type: FetchInstanceScript
+                  timeout: 10m
+                  spec: {}
+            rollbackSteps: []
+          environment:
+            environmentRef: nyl_cfd_repro
+            deployToAll: false
+            infrastructureDefinitions: <+input>
+        tags: {}
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: StageRollback
