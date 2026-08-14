@@ -1,0 +1,21 @@
+infrastructureDefinition:
+  name: infra3_for_nyl_cfd
+  identifier: infra3_for_nyl_cfd
+  branch: main
+  filePath: .harness/orgs/default/projects/Keshav_project1/envs/pre_production/nyl_cfd_repro/infras/infra2_for_nyl_cfd.yaml
+  orgIdentifier: default
+  projectIdentifier: Keshav_project1
+  environmentRef: nyl_cfd_repro
+  deploymentType: CustomDeployment
+  type: CustomDeployment
+  spec:
+    customDeploymentRef:
+      templateRef: MuleSoftTemplate
+      versionLabel: v1.1
+    variables:
+      - name: clusterUrl
+        type: String
+        description: ""
+        required: false
+        value: <+input>
+  allowSimultaneousDeployments: false
